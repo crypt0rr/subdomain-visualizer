@@ -40,6 +40,13 @@ function create_workingdir () {
 
 function get_domain () {
     read -p "Please enter a domain to harvest (e.g. example.com): " DOMAIN
+    read -p "Do you want to search with crobat (y) or have your own list of subdomains (n)? y/n: " ANSWER
+    if [[ $ANSWER =~ ^[Nn]$ ]]; then
+        read -e -p "Enter file containing line seperated subdomains: " SUBDOMAINS
+        cat $SUBDOMAINS > recon-folder/$DOMAIN.crobat.log
+    else
+        run_crobat
+    fi
 }
 
 function run_crobat () {
@@ -90,9 +97,9 @@ function run_reporting () {
 }
 
 function main () {
-    echo -e "Subdomain-visualizer v0.1 by crypt0rr\n"
+    echo -e "Subdomain-visualizer v0.2 by crypt0rr\n"
     echo -e "\e[31mFor educational purposes only! Do not use against domains you don't own / allowed to scan.\e[0m"; sleep 5
-    requirement_checker; create_workingdir; get_domain; run_crobat; run_nmap; run_aquatone; run_reporting
+    requirement_checker; create_workingdir; get_domain; run_nmap; run_aquatone; run_reporting
 }
 
 main
