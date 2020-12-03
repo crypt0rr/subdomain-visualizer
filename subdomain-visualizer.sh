@@ -3,12 +3,14 @@ function requirement_checker () {
     echo -e "\nChecking requirements..."
     PROGRAMLIST=(aquatone crobat nmap)
     COUNTER=0
-    ALLPASS=TRUE
     for PROGRAM in ${PROGRAMLIST[*]}; do
         if ! [ -x "$(command -v $PROGRAM)" ]; then
-            echo -e '\e[31m[-]' ${PROGRAMLIST[COUNTER]}  'is not installed or not in path' >&2; ((COUNTER=COUNTER + 1)); ALLPASS=FALSE
+            echo -e '\e[31m[-]' ${PROGRAMLIST[COUNTER]}  'is not installed or not in path' >&2; ((COUNTER=COUNTER + 1))
         else
             echo -e '\e[32m[+]' ${PROGRAMLIST[COUNTER]} 'is installed'; ((COUNTER=COUNTER + 1))
+        fi
+        if ! [ -x "$(command -v crobat)" ]; then
+            echo -e '\e[31m[-]Crobat is not installed or not in path'
         fi
     done
 
@@ -18,16 +20,13 @@ function requirement_checker () {
     else
         echo -e "\e[31mYour internet connection seems down, please check before continuing"; exit 1
     fi
-
-    if [ "$ALLPASS" == FALSE ]; then
-        echo -e "\n\e[31mNot all requirements met please fix and try again"; exit 1
-    fi
     echo -e "\e[0m"
+    create_workingdir
 }
 
 function create_workingdir () {
     echo -e "\nFolder recon-folder will be created, this will contain results"
-    mkdir recon-folder || { echo -e "\n\e[31mFolder recon-folder could not be created\e[0m"; EXISTS=1; }
+    mkdir recon-folder 2>/dev/null || { echo -e "\e[31mFolder recon-folder could not be created\e[0m\n"; EXISTS=1; }
     if [[ $EXISTS = '1' ]]; then
         read -p "Do you want to remove the existing recon-folder? y/n: " ANSWER
         if [[ $ANSWER =~ ^[Yy]$ ]]; then
@@ -36,27 +35,43 @@ function create_workingdir () {
             echo -e "\nCannot proceed, try again\e[0m\n"; main
         fi
     fi
+    get_domain
 }
 
 function get_domain () {
     read -p "Please enter a domain to harvest (e.g. example.com): " DOMAIN
-    read -p "Do you want to search with crobat (y) or have your own list of subdomains (n)? y/n: " ANSWER
-    if [[ $ANSWER =~ ^[Nn]$ ]]; then
-        read -e -p "Enter file containing line seperated subdomains: " SUBDOMAINS
-        cat $SUBDOMAINS > recon-folder/$DOMAIN.crobat.log
-    else
-        run_crobat
-    fi
+    get_subdomains
 }
 
-function run_crobat () {
-    crobat -s $DOMAIN | tee recon-folder/$DOMAIN.crobat.log &>/dev/null
-    echo "Total subdomains found by crobat:" $(cat recon-folder/$DOMAIN.crobat.log | wc -l)
+function get_subdomains () {
+    echo "1. SonarSearch Crobat"
+    echo "2. SecurityTrails.com (APIKEY required)"
+    echo "3. You own file containing subdomains"
+    read -p "What source should be used for subdomains: " ANSWER
+    if [[ $ANSWER = '1' ]]; then
+        crobat -s $DOMAIN | tee recon-folder/$DOMAIN.subdomains.log &>/dev/null
+        echo "Total subdomains found by crobat:" $(cat recon-folder/$DOMAIN.subdomains.log | wc -l)
+    elif [[ $ANSWER = '2' ]]; then
+        read -p "Please enter APIKEY: " APIKEY_IN
+        APIKEY="APIKEY: $APIKEY_IN"
+        curl -s -X GET --header 'Accept: application/json' --header "$APIKEY" https://api.securitytrails.com/v1/domain/"$DOMAIN"/subdomains?children_only=false > recon-folder/tmp_apioutput && jq -r '.subdomains' recon-folder/tmp_apioutput | tr -d '",[] ' | tee recon-folder/tmp_subdomains &>/dev/null
+        sed '/^$/d' recon-folder/tmp_subdomains | tee recon-folder/tmp_parsing &>/dev/null
+        sed -e "s/$/.$DOMAIN/g" recon-folder/tmp_parsing | tee recon-folder/$DOMAIN.subdomains.log &>/dev/null
+        rm recon-folder/tmp_*
+        echo "Total subdomains found by SecurityTrails:" $(cat recon-folder/$DOMAIN.subdomains.log | wc -l)
+    elif [[ $ANSWER = '3' ]]; then
+        read -e -p "Enter file containing line seperated subdomains: " SUBDOMAINS
+        cat $SUBDOMAINS > recon-folder/$DOMAIN.subdomains.log
+    else
+        echo "Please enter a valid option"; get_subdomains
+    fi
+    run_nmap
 }
 
 function run_nmap () {
     echo -e "\nRunning nmap agains found subdomains"
-    nmap -iL recon-folder/$DOMAIN.crobat.log -Pn -T4 -oA recon-folder/$DOMAIN.log || { echo -e "\e[31mError occured, please restart."; exit 1; }
+    nmap -iL recon-folder/$DOMAIN.subdomains.log -Pn -T4 -oA recon-folder/$DOMAIN.nmap.log || { echo -e "\e[31mError occured, please restart."; exit 1; }
+    run_aquatone
 }
 
 function run_aquatone () {
@@ -66,12 +81,13 @@ function run_aquatone () {
         echo "Make sure your proxy is running and make sure requests can come through"
         read -p "Give proxy IP and port (e.g. http://127.0.0.1:8080): " PROXY
         echo "aquatone will now start..."
-        cat recon-folder/$DOMAIN.log.xml | aquatone -nmap -proxy $PROXY -out recon-folder || { echo -e "\e[31mError occured, please restart."; exit 1; }
+        cat recon-folder/$DOMAIN.nmap.log.xml | aquatone -nmap -proxy $PROXY -out recon-folder || { echo -e "\e[31mError occured, please restart."; exit 1; }
     fi
     if [[ $ANSWER =~ ^[Nn]$ ]]; then
         echo "aquatone will now start..."
-        cat recon-folder/$DOMAIN.log.xml | aquatone -nmap -out recon-folder || { echo -e "\e[31mError occured, please restart."; exit 1; }
+        cat recon-folder/$DOMAIN.nmap.log.xml | aquatone -nmap -out recon-folder || { echo -e "\e[31mError occured, please restart."; exit 1; }
     fi
+    run_reporting
 }
 
 function run_reporting () {
@@ -97,9 +113,9 @@ function run_reporting () {
 }
 
 function main () {
-    echo -e "Subdomain-visualizer v0.2 by crypt0rr\n"
+    echo -e "Subdomain-visualizer v0.3 by crypt0rr\n"
     echo -e "\e[31mFor educational purposes only! Do not use against domains you don't own / allowed to scan.\e[0m"; sleep 5
-    requirement_checker; create_workingdir; get_domain; run_nmap; run_aquatone; run_reporting
+    requirement_checker
 }
 
 main
